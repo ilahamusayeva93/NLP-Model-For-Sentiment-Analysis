@@ -1,0 +1,145 @@
+---
+title: "R Notebook_NLP Model for Sentiment Analysis"
+author: "Ilaha Musayeva"
+date: "11.04.23"
+---
+## Load Required Librarires
+
+```{r}
+library(tidyverse)
+library(text2vec)
+library(caTools)
+library(glmnet)
+library(pROC)
+```
+
+## Read and Explore Data
+```{r}
+# Read CSV file containing NLP data
+data <- read_csv("nlpdata.csv")
+
+# Display the first few rows of the dataset
+data %>% head()
+
+# Display column names
+colnames(data)
+
+```
+## Data Preparation
+```{r}
+# Split the dataset into training and testing sets
+set.seed(123)
+split <- caTools::sample.split(data$Liked, SplitRatio = 0.8)
+train <- subset(data, split == TRUE)
+test <- subset(data, split == FALSE)
+
+```
+
+## Tokenization and Vectorization
+```{r}
+# Tokenize and create a document-term matrix (DTM) for training data
+it_train <- train$Review %>% 
+  itoken(preprocessor = tolower, 
+         tokenizer = word_tokenizer,
+         ids = train$...1,  
+         progressbar = FALSE) 
+
+# Define stop words
+stop_words <- c("i", "you", "he", "she", "it", "we", "they",
+                "me", "him", "her", "them",
+                "my", "your", "yours", "his", "our", "ours",
+                "myself", "yourself", "himself", "herself", "ourselves",
+                "the", "a", "an", "and", "or", "on", "by", "so",
+                "from", "about", "to", "for", "of", 
+                "that", "this", "is", "are")
+
+# Create vocabulary and prune it
+vocab <- it_train %>% create_vocabulary(stopwords = stop_words)
+pruned_vocab <- vocab %>% 
+  prune_vocabulary(term_count_min = 10, 
+                   doc_proportion_max = 0.5,
+                   doc_proportion_min = 0.001)
+
+# Display top 10 terms in pruned vocabulary
+pruned_vocab %>% 
+  arrange(desc(term_count)) %>% 
+  head(10) 
+
+# Create vectorizer and document-term matrix for training data
+vectorizer <- pruned_vocab %>% vocab_vectorizer()
+dtm_train <- it_train %>% create_dtm(vectorizer)
+
+```
+## Model Training
+```{r}
+# Train a glmnet classifier using cross-validation
+glmnet_classifier <- cv.glmnet(
+  x = as.matrix(dtm_train),
+  y = train$Liked,
+  family = 'binomial',
+  type.measure = "auc",
+  nfolds = 4,
+  thresh = 0.001,
+  maxit = 1000
+)
+
+```
+
+## Model Evaluation on Training Set
+```{r}
+# Display maximum AUC on training set
+glmnet_classifier$cvm %>% max() %>% round(3) %>% paste("-> Max AUC")
+
+```
+
+## Tokenization and Vectorization for Testing Set
+```{r}
+# Tokenize and create a document-term matrix (DTM) for testing data
+it_test <- test$Review %>% 
+  itoken(preprocessor = tolower,
+         tokenizer = word_tokenizer,
+         ids = test$...1,  
+         progressbar = FALSE)
+
+# Create document-term matrix for testing data using the existing vocabulary
+dtm_test <- it_test %>% create_dtm(vectorizer)
+
+```
+## Model Evaluation on Testing Set
+```{r}
+# Make predictions on the testing data
+preds <- predict(glmnet_classifier, newx = as.matrix(dtm_test), type = 'response')[,1]
+labels_predicted <- ifelse(preds > 0.5, 1, 0)
+
+# Extract coefficients and feature importance
+coefficients <- coef(glmnet_classifier, s = "lambda.min")
+cat("Coefficients:\n")
+print(coefficients)
+
+feature_importance <- abs(coefficients)
+cat("\nFeature Importance:\n")
+print(feature_importance)
+
+```
+## ROC Analysis and Confusion Matrix
+```{r}
+# ROC Analysis
+predicted_probabilities <- predict(glmnet_classifier, newx = as.matrix(dtm_test), type = 'response')[,1]
+roc_curve <- roc(test$Liked, predicted_probabilities)
+
+# Display confusion matrix
+confusion_matrix <- table(test$Liked, ifelse(predicted_probabilities > 0.5, 1, 0))
+cat("\nConfusion Matrix:\n")
+print(confusion_matrix)
+
+```
+
+
+
+
+
+
+
+
+
+
